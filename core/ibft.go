@@ -52,7 +52,9 @@ const (
 )
 
 var (
-	errTimeoutExpired = errors.New("round timeout expired")
+	errTimeoutExpired               = errors.New("round timeout expired")
+	errNoActiveSequence             = errors.New("no active sequence")
+	errActiveSequenceHeightMismatch = errors.New("active sequence height does not match requested height")
 )
 
 // IBFT represents a single instance of the IBFT state machine
@@ -392,6 +394,28 @@ func (i *IBFT) RunSequence(ctx context.Context, h uint64) {
 			return
 		}
 	}
+}
+
+// RefreshVotingPowers refreshes validator voting powers for the currently active sequence height.
+func (i *IBFT) RefreshVotingPowers(height uint64) error {
+	i.state.RLock()
+	activeHeight := i.state.view.Height
+	active := i.state.roundStarted && i.state.name != fin
+	i.state.RUnlock()
+
+	if !active {
+		return errNoActiveSequence
+	}
+
+	if activeHeight != height {
+		return errActiveSequenceHeightMismatch
+	}
+
+	if err := i.validatorManager.Init(height); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // startRound runs the state machine loop for the current round

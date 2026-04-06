@@ -400,6 +400,7 @@ func (i *IBFT) RunSequence(ctx context.Context, h uint64) {
 func (i *IBFT) RefreshVotingPowers(height uint64) error {
 	i.state.RLock()
 	activeHeight := i.state.view.Height
+	activeRound := i.state.view.Round
 	active := i.state.roundStarted && i.state.name != fin
 	i.state.RUnlock()
 
@@ -411,11 +412,88 @@ func (i *IBFT) RefreshVotingPowers(height uint64) error {
 		return errActiveSequenceHeightMismatch
 	}
 
+	currentView := &proto.View{
+		Height: activeHeight,
+		Round:  activeRound,
+	}
+
+	oldQuorums := i.getBufferedViewQuorums(currentView)
+
 	if err := i.validatorManager.Init(height); err != nil {
 		return err
 	}
 
+	newQuorums := i.getBufferedViewQuorums(currentView)
+	i.signalBufferedQuorumTransitions(currentView, oldQuorums, newQuorums)
+
 	return nil
+}
+
+type bufferedViewQuorums struct {
+	prepareReached bool
+	commitReached  bool
+	rccReached     bool
+	rccRound       uint64
+}
+
+func (i *IBFT) getBufferedViewQuorums(view *proto.View) bufferedViewQuorums {
+	prepareMsgs := i.messages.GetValidMessages(
+		view,
+		proto.MessageType_PREPARE,
+		func(_ *proto.IbftMessage) bool { return true },
+	)
+	commitMsgs := i.messages.GetValidMessages(
+		view,
+		proto.MessageType_COMMIT,
+		func(_ *proto.IbftMessage) bool { return true },
+	)
+
+	result := bufferedViewQuorums{
+		prepareReached: i.hasQuorumByMsgType(prepareMsgs, proto.MessageType_PREPARE),
+		commitReached:  i.hasQuorumByMsgType(commitMsgs, proto.MessageType_COMMIT),
+	}
+
+	if rcc := i.handleRoundChangeMessage(view); rcc != nil {
+		result.rccReached = true
+		result.rccRound = rcc.RoundChangeMessages[0].View.Round
+	}
+
+	return result
+}
+
+func (i *IBFT) signalBufferedQuorumTransitions(
+	view *proto.View,
+	oldQuorums bufferedViewQuorums,
+	newQuorums bufferedViewQuorums,
+) {
+	i.state.RLock()
+	active := i.state.roundStarted && i.state.name != fin
+	currentHeight := i.state.view.Height
+	currentRound := i.state.view.Round
+	i.state.RUnlock()
+
+	// Round might have changed while refresh was in progress.
+	if !active || currentHeight != view.Height || currentRound != view.Round {
+		return
+	}
+
+	if !oldQuorums.prepareReached && newQuorums.prepareReached {
+		i.messages.SignalEvent(proto.MessageType_PREPARE, view)
+	}
+
+	if !oldQuorums.commitReached && newQuorums.commitReached {
+		i.messages.SignalEvent(proto.MessageType_COMMIT, view)
+	}
+
+	if !oldQuorums.rccReached && newQuorums.rccReached {
+		i.messages.SignalEvent(
+			proto.MessageType_ROUND_CHANGE,
+			&proto.View{
+				Height: view.Height,
+				Round:  newQuorums.rccRound,
+			},
+		)
+	}
 }
 
 // startRound runs the state machine loop for the current round

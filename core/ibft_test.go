@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math/big"
 	"math/rand"
 	"sync"
 	"testing"
@@ -211,6 +212,329 @@ func generateFilledRCMessages(
 	}
 
 	return roundChangeMessages
+}
+
+func TestIBFT_RefreshVotingPowers_ReevaluatesBufferedPrepareQuorum(t *testing.T) {
+	t.Parallel()
+
+	const (
+		height = uint64(11)
+		round  = uint64(2)
+	)
+
+	var getVotingPowersCalls int
+
+	backend := mockBackend{
+		getVotingPowerFn: func(_ uint64) (map[string]*big.Int, error) {
+			getVotingPowersCalls++
+
+			// before refresh: quorum = 3, proposer + node 1 = 2 (no quorum)
+			if getVotingPowersCalls == 1 {
+				return map[string]*big.Int{
+					"node 0": big.NewInt(1),
+					"node 1": big.NewInt(1),
+					"node 2": big.NewInt(1),
+				}, nil
+			}
+
+			// after refresh: quorum = 3, proposer + node 1 = 3 (quorum)
+			return map[string]*big.Int{
+				"node 0": big.NewInt(1),
+				"node 1": big.NewInt(2),
+				"node 2": big.NewInt(1),
+			}, nil
+		},
+	}
+
+	var signaled []proto.MessageType
+
+	msgs := mockMessages{
+		getValidMessagesFn: func(
+			view *proto.View,
+			messageType proto.MessageType,
+			_ func(message *proto.IbftMessage) bool,
+		) []*proto.IbftMessage {
+			if view.Height != height || view.Round != round {
+				return nil
+			}
+
+			if messageType != proto.MessageType_PREPARE {
+				return nil
+			}
+
+			return []*proto.IbftMessage{
+				{
+					From: []byte("node 1"),
+					View: &proto.View{Height: height, Round: round},
+					Type: proto.MessageType_PREPARE,
+				},
+			}
+		},
+		getExtendedRCCFn: func(uint64, func(*proto.IbftMessage) bool, func(uint64, []*proto.IbftMessage) bool) []*proto.IbftMessage {
+			return nil
+		},
+		signalEventFn: func(messageType proto.MessageType, _ *proto.View) {
+			signaled = append(signaled, messageType)
+		},
+	}
+
+	i := NewIBFT(mockLogger{}, backend, mockTransport{})
+	i.messages = msgs
+	i.state.view = &proto.View{Height: height, Round: round}
+	i.state.roundStarted = true
+	i.state.name = prepare
+	i.state.proposalMessage = &proto.IbftMessage{
+		From: []byte("node 0"),
+		View: &proto.View{Height: height, Round: round},
+		Type: proto.MessageType_PREPREPARE,
+	}
+
+	require.NoError(t, i.validatorManager.Init(height))
+	require.NoError(t, i.RefreshVotingPowers(height))
+
+	require.Equal(t, []proto.MessageType{proto.MessageType_PREPARE}, signaled)
+}
+
+func TestIBFT_RefreshVotingPowers_ReevaluatesBufferedCommitQuorum(t *testing.T) {
+	t.Parallel()
+
+	const (
+		height = uint64(15)
+		round  = uint64(1)
+	)
+
+	var getVotingPowersCalls int
+
+	backend := mockBackend{
+		getVotingPowerFn: func(_ uint64) (map[string]*big.Int, error) {
+			getVotingPowersCalls++
+
+			if getVotingPowersCalls == 1 {
+				return map[string]*big.Int{
+					"node 0": big.NewInt(1),
+					"node 1": big.NewInt(1),
+					"node 2": big.NewInt(1),
+				}, nil
+			}
+
+			return map[string]*big.Int{
+				"node 0": big.NewInt(1),
+				"node 1": big.NewInt(3),
+			}, nil
+		},
+	}
+
+	var signaled []proto.MessageType
+
+	msgs := mockMessages{
+		getValidMessagesFn: func(
+			view *proto.View,
+			messageType proto.MessageType,
+			_ func(message *proto.IbftMessage) bool,
+		) []*proto.IbftMessage {
+			if view.Height != height || view.Round != round {
+				return nil
+			}
+
+			if messageType != proto.MessageType_COMMIT {
+				return nil
+			}
+
+			return []*proto.IbftMessage{
+				{
+					From: []byte("node 1"),
+					View: &proto.View{Height: height, Round: round},
+					Type: proto.MessageType_COMMIT,
+				},
+			}
+		},
+		getExtendedRCCFn: func(uint64, func(*proto.IbftMessage) bool, func(uint64, []*proto.IbftMessage) bool) []*proto.IbftMessage {
+			return nil
+		},
+		signalEventFn: func(messageType proto.MessageType, _ *proto.View) {
+			signaled = append(signaled, messageType)
+		},
+	}
+
+	i := NewIBFT(mockLogger{}, backend, mockTransport{})
+	i.messages = msgs
+	i.state.view = &proto.View{Height: height, Round: round}
+	i.state.roundStarted = true
+	i.state.name = commit
+
+	require.NoError(t, i.validatorManager.Init(height))
+	require.NoError(t, i.RefreshVotingPowers(height))
+
+	require.Equal(t, []proto.MessageType{proto.MessageType_COMMIT}, signaled)
+}
+
+func TestIBFT_RefreshVotingPowers_ReevaluatesBufferedRCCQuorum(t *testing.T) {
+	t.Parallel()
+
+	const (
+		height       = uint64(20)
+		currentRound = uint64(2)
+		rccRound     = uint64(3)
+	)
+
+	var getVotingPowersCalls int
+
+	backend := mockBackend{
+		getVotingPowerFn: func(_ uint64) (map[string]*big.Int, error) {
+			getVotingPowersCalls++
+
+			if getVotingPowersCalls == 1 {
+				return map[string]*big.Int{
+					"node 0": big.NewInt(1),
+					"node 1": big.NewInt(1),
+					"node 2": big.NewInt(1),
+				}, nil
+			}
+
+			return map[string]*big.Int{
+				"node 0": big.NewInt(1),
+				"node 1": big.NewInt(3),
+			}, nil
+		},
+	}
+
+	var (
+		signaledType proto.MessageType
+		signaledView *proto.View
+	)
+
+	bufferedRC := []*proto.IbftMessage{
+		{
+			From: []byte("node 1"),
+			View: &proto.View{
+				Height: height,
+				Round:  rccRound,
+			},
+			Type: proto.MessageType_ROUND_CHANGE,
+			Payload: &proto.IbftMessage_RoundChangeData{
+				RoundChangeData: &proto.RoundChangeMessage{},
+			},
+		},
+	}
+
+	msgs := mockMessages{
+		getValidMessagesFn: func(*proto.View, proto.MessageType, func(*proto.IbftMessage) bool) []*proto.IbftMessage {
+			return nil
+		},
+		getExtendedRCCFn: func(
+			h uint64,
+			_ func(*proto.IbftMessage) bool,
+			isValidRCC func(uint64, []*proto.IbftMessage) bool,
+		) []*proto.IbftMessage {
+			if h != height {
+				return nil
+			}
+
+			if !isValidRCC(rccRound, bufferedRC) {
+				return nil
+			}
+
+			return bufferedRC
+		},
+		signalEventFn: func(messageType proto.MessageType, messageView *proto.View) {
+			signaledType = messageType
+			signaledView = messageView
+		},
+	}
+
+	i := NewIBFT(mockLogger{}, backend, mockTransport{})
+	i.messages = msgs
+	i.state.view = &proto.View{Height: height, Round: currentRound}
+	i.state.roundStarted = true
+	i.state.name = newRound
+
+	require.NoError(t, i.validatorManager.Init(height))
+	require.NoError(t, i.RefreshVotingPowers(height))
+
+	require.Equal(t, proto.MessageType_ROUND_CHANGE, signaledType)
+	require.Equal(t, &proto.View{Height: height, Round: rccRound}, signaledView)
+}
+
+func TestIBFT_RefreshVotingPowers_DoesNotSpamSignalsWhenQuorumUnchanged(t *testing.T) {
+	t.Parallel()
+
+	const (
+		height = uint64(30)
+		round  = uint64(0)
+	)
+
+	var getVotingPowersCalls int
+
+	backend := mockBackend{
+		getVotingPowerFn: func(_ uint64) (map[string]*big.Int, error) {
+			getVotingPowersCalls++
+
+			if getVotingPowersCalls == 1 {
+				return map[string]*big.Int{
+					"node 0": big.NewInt(1),
+					"node 1": big.NewInt(1),
+					"node 2": big.NewInt(1),
+				}, nil
+			}
+
+			return map[string]*big.Int{
+				"node 0": big.NewInt(1),
+				"node 1": big.NewInt(2),
+				"node 2": big.NewInt(1),
+			}, nil
+		},
+	}
+
+	var signalCount int
+
+	msgs := mockMessages{
+		getValidMessagesFn: func(
+			view *proto.View,
+			messageType proto.MessageType,
+			_ func(*proto.IbftMessage) bool,
+		) []*proto.IbftMessage {
+			if view.Height != height || view.Round != round {
+				return nil
+			}
+
+			if messageType != proto.MessageType_PREPARE {
+				return nil
+			}
+
+			return []*proto.IbftMessage{
+				{
+					From: []byte("node 1"),
+					View: &proto.View{Height: height, Round: round},
+					Type: proto.MessageType_PREPARE,
+				},
+			}
+		},
+		getExtendedRCCFn: func(uint64, func(*proto.IbftMessage) bool, func(uint64, []*proto.IbftMessage) bool) []*proto.IbftMessage {
+			return nil
+		},
+		signalEventFn: func(messageType proto.MessageType, _ *proto.View) {
+			if messageType == proto.MessageType_PREPARE {
+				signalCount++
+			}
+		},
+	}
+
+	i := NewIBFT(mockLogger{}, backend, mockTransport{})
+	i.messages = msgs
+	i.state.view = &proto.View{Height: height, Round: round}
+	i.state.roundStarted = true
+	i.state.name = prepare
+	i.state.proposalMessage = &proto.IbftMessage{
+		From: []byte("node 0"),
+		View: &proto.View{Height: height, Round: round},
+		Type: proto.MessageType_PREPREPARE,
+	}
+
+	require.NoError(t, i.validatorManager.Init(height))
+	require.NoError(t, i.RefreshVotingPowers(height))
+	require.NoError(t, i.RefreshVotingPowers(height))
+
+	require.Equal(t, 1, signalCount)
 }
 
 // TestRunNewRound_Proposer checks that the node functions

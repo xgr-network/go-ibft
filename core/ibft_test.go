@@ -3417,7 +3417,7 @@ func Test_getRoundTimeout(t *testing.T) {
 				additionalTimeout: time.Second,
 				round:             1,
 			},
-			want: time.Second * 3,
+			want: 2200 * time.Millisecond,
 		},
 		{
 			name: "third round duration",
@@ -3425,7 +3425,7 @@ func Test_getRoundTimeout(t *testing.T) {
 				baseRoundTimeout: time.Second,
 				round:            3,
 			},
-			want: time.Second * 8,
+			want: 1728 * time.Millisecond,
 		},
 	}
 

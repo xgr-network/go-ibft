@@ -62,13 +62,12 @@ func Test_CalculateQuorum(t *testing.T) {
 				"E": big.NewInt(1),
 				"F": big.NewInt(1),
 			},
-			// 5 signed (quorum should be 5)
+			// 4 signed (quorum is ceil(12/3)=4)
 			signers: map[string]struct{}{
 				"A": {},
 				"B": {},
 				"C": {},
 				"D": {},
-				"E": {},
 			},
 			hasQuorum: true,
 		},
@@ -82,12 +81,11 @@ func Test_CalculateQuorum(t *testing.T) {
 				"E": big.NewInt(1),
 				"F": big.NewInt(1),
 			},
-			// only 4 signed (quorum should be 5)
+			// only 3 signed (quorum is 4)
 			signers: map[string]struct{}{
 				"A": {},
 				"B": {},
 				"C": {},
-				"D": {},
 			},
 			hasQuorum: false,
 		},
@@ -99,7 +97,7 @@ func Test_CalculateQuorum(t *testing.T) {
 				"C": big.NewInt(2),
 				"D": big.NewInt(3),
 			},
-			// 3 signed with voting power of 6 (quorum should be 7)
+			// 3 signed with voting power of 6 (quorum is 6)
 			signers: map[string]struct{}{
 				"A": {},
 				"C": {},
@@ -115,7 +113,7 @@ func Test_CalculateQuorum(t *testing.T) {
 				"C": big.NewInt(2),
 				"D": big.NewInt(3),
 			},
-			// only 2 signed with voting power of 5 (quorum should be 7)
+			// only 2 signed with voting power of 5 (quorum is 6)
 			signers: map[string]struct{}{
 				"A": {},
 				"D": {},
@@ -130,7 +128,7 @@ func Test_CalculateQuorum(t *testing.T) {
 				"C": big.NewInt(3),
 				"D": big.NewInt(3),
 			},
-			// 3 signed with voting power of 7 (quorum should be 7)
+			// 3 signed with voting power of 7 (quorum is 7)
 			signers: map[string]struct{}{
 				"A": {},
 				"B": {},
@@ -146,7 +144,7 @@ func Test_CalculateQuorum(t *testing.T) {
 				"C": big.NewInt(3),
 				"D": big.NewInt(3),
 			},
-			// only 2 signed with voting power of 5 (quorum should be 7)
+			// only 2 signed with voting power of 5 (quorum is 7)
 			signers: map[string]struct{}{
 				"A": {},
 				"D": {},
@@ -161,7 +159,7 @@ func Test_CalculateQuorum(t *testing.T) {
 				"C": big.NewInt(7),
 				"D": big.NewInt(5),
 			},
-			// 3 signed with voting power of 16 (quorum should be 15)
+			// 3 signed with voting power of 16 (quorum is 14)
 			signers: map[string]struct{}{
 				"A": {},
 				"B": {},
@@ -177,12 +175,27 @@ func Test_CalculateQuorum(t *testing.T) {
 				"C": big.NewInt(7),
 				"D": big.NewInt(5),
 			},
-			// only 2 signed with voting power of 12 (quorum should be 15)
+			// only 2 signed with voting power of 12 (quorum is 14)
 			signers: map[string]struct{}{
 				"C": {},
 				"D": {},
 			},
 			hasQuorum: false,
+		},
+		{
+			// decay case: 4 validators, one decayed to 0, total voting power 30
+			validatorsVotingPower: map[string]*big.Int{
+				"A": big.NewInt(0),
+				"B": big.NewInt(10),
+				"C": big.NewInt(10),
+				"D": big.NewInt(10),
+			},
+			// two live validators have exactly ceil(2/3*30)=20 power
+			signers: map[string]struct{}{
+				"B": {},
+				"C": {},
+			},
+			hasQuorum: true,
 		},
 	}
 

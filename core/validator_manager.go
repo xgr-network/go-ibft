@@ -91,7 +91,7 @@ func (vm *ValidatorManager) HasQuorum(sendersAddrs map[string]struct{}) bool {
 		}
 	}
 
-	// aggVotingPower >= (2 * totalVotingPower / 3) + 1
+	// aggVotingPower >= ceil(2 * totalVotingPower / 3)
 	return messageVotePower.Cmp(vm.quorumSize) >= 0
 }
 
@@ -126,12 +126,12 @@ func (vm *ValidatorManager) HasPrepareQuorum(stateName stateType, proposalMessag
 	return vm.HasQuorum(sendersAddressesMap)
 }
 
-// calculateQuorum calculates quorum size which is FLOOR(2 * totalVotingPower / 3) + 1
+// calculateQuorum calculates quorum size which is CEIL(2 * totalVotingPower / 3).
 func calculateQuorum(totalVotingPower *big.Int) *big.Int {
 	quorum := new(big.Int).Mul(totalVotingPower, big.NewInt(2))
+	quorum.Add(quorum, big.NewInt(2))
 
-	// this will floor the (2 * totalVotingPower/3) and add 1
-	return quorum.Div(quorum, big.NewInt(3)).Add(quorum, big.NewInt(1))
+	return quorum.Div(quorum, big.NewInt(3))
 }
 
 func calculateTotalVotingPower(validatorsVotingPower map[string]*big.Int) *big.Int {
